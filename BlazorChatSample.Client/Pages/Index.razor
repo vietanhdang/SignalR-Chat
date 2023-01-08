@@ -1,0 +1,235 @@
+﻿@using BlazorChatSample.Shared
+@page "/"
+@inject NavigationManager navigationManager
+@inject Blazored.LocalStorage.ILocalStorageService localStorage
+
+<div class="top-row p-4">
+    @if (chatting)
+    {
+        <p class="login-with">Bạn đang kết nối với tên <b>@username</b> <button class="btn btn-sm btn-danger ml-md-auto" @onclick="@DisconnectAsync">Thoát</button> </p>
+        
+    }
+</div>
+
+<div class="content px-4">
+
+
+    @if (!chatting)
+    {
+        @* Moved instructions to shared component *@
+        <Instructions />
+
+        <h2>Chat</h2>
+
+        <p>
+            Nhập tên của bạn và enter hoặc nhấn chat để bắt đầu chat:
+        </p>
+
+        <div class="input-group mb-3">
+            <input type="text" class="form-control" maxlength="32" @bind="@username" @bind:event="oninput"
+            placeholder="Nhập tên của bạn" aria-label="Recipient's username" aria-describedby="button-addon2" @onkeypress="@HandleKeyPress">
+            <div class="input-group-append">
+                <button class="btn btn-outline-secondary" type="button" id="button-addon2" @onclick="@Chat"><span
+                    class="oi oi-chat" aria-hidden="true"></span> Chat!</button>
+            </div>
+        </div>
+
+        @if (message != null)
+        {
+            <div class="invalid-feedback">@message</div>
+            <small id="emailHelp" class="form-text text-muted">@message</small>
+        }
+    }
+    @if (chatting)
+    {
+        <div class="mesgs">
+            <div class="msg_history">
+                @foreach (var item in messages)
+                {
+                    <div class="@item.CSS">
+                        <p class="message_detail">
+                            @item.Body
+                        </p>
+                    </div>
+                }
+            </div>
+            <div class="type_msg">
+                <div class="input_msg_write">
+                    <input type="text" class="write_msg" placeholder="Nhập tin nhắn" @bind="@newMessage" @bind:event="oninput" @onkeypress="@HandleKeyPress">
+                    <button class="msg_send_btn" type="button" @onclick="@SendAsync" title="Gửi">
+                        <i class="oi oi-arrow-right" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // cờ cho biết trạng thái trò chuyện
+    bool chatting = false;
+
+    // tên của người dùng sẽ trò chuyện
+    string username = null;
+
+    // id của người dùng
+    string userId = null;
+
+    ChatClient client = null;
+
+    // tin nhắn
+    string message = null;
+
+    // tin nhắn mới
+    string newMessage = null;
+
+    // Danh sách tin nhắn
+    List<Message> messages = new List<Message>();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            this.username = await localStorage.GetItemAsync<string>("username");
+            if (!String.IsNullOrEmpty(this.username))
+            {
+                await Chat();
+                StateHasChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Bắt đầu chat từ client
+    /// </summary>
+    async Task Chat()
+    {
+
+        // kiểm tra xem tên có hợp lệ không
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            message = "Tên không được để trống";
+            return;
+        }
+        else
+        {
+            // lưu tên vào local storage phục vụ cho lần sau
+            await localStorage.SetItemAsync("username", username);
+        }
+
+        try
+        {
+            // remove old messages if any
+            messages.Clear();
+
+            // Create the chat client
+            string baseUrl = navigationManager.BaseUri;
+
+            client = new ChatClient(username, baseUrl);
+            // add an event handler for incoming messages
+            client.MessageReceived += MessageReceived;
+            // start the client
+            Console.WriteLine("Index: chart starting...");
+            await client.StartAsync();
+            Console.WriteLine("Index: chart started?");
+
+            chatting = true;
+        }
+        catch (Exception e)
+        {
+            message = $"ERROR: Failed to start chat client: {e.Message}";
+            Console.WriteLine(e.Message);
+            Console.WriteLine(e.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Xử ly sự kiện nhấn phím
+    /// </summary>
+    /// <param name="e"></param>
+    async Task HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            if (!chatting)
+            {
+                await Chat();
+            }
+            else
+            {
+                await SendAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tin nhắn đến
+    /// </summary>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
+    void MessageReceived(object sender, MessageReceivedEventArgs e)
+    {
+        Console.WriteLine($"Blazor: receive {e.Username}: {e.Message}");
+        bool isMine = false;
+        if (!string.IsNullOrWhiteSpace(e.Username))
+        {
+            isMine = string.Equals(e.Username, username, StringComparison.CurrentCultureIgnoreCase);
+        }
+
+        var newMsg = new Message(e.Username, e.Message, isMine);
+        messages.Add(newMsg);
+
+        // Inform blazor the UI needs updating
+        StateHasChanged();
+       
+    }
+    
+
+    async Task DisconnectAsync()
+    {
+        if (chatting)
+        {
+            await client.StopAsync();
+            client = null;
+            message = "Đã rời phòng";
+            chatting = false;
+        }
+    }
+
+    async Task SendAsync()
+    {
+        if (chatting && !string.IsNullOrWhiteSpace(newMessage))
+        {
+            // send message to hub
+            await client.SendAsync(newMessage);
+            // clear input box
+            newMessage = "";
+        }
+    }
+
+    class Message
+    {
+        public Message(string username, string body, bool mine)
+        {
+            Username = username;
+            Body = body;
+            Mine = mine;
+        }
+
+        public string Username { get; set; }
+        public string Body { get; set; }
+        public bool Mine { get; set; }
+
+        /// <summary>
+        /// Determine CSS classes to use for message div
+        /// </summary>
+        public string CSS
+        {
+            get
+            {
+                return Mine ? "sent" : "received";
+            }
+        }
+    }
+
+}
